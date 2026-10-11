@@ -6,6 +6,7 @@ import {
   Boxes,
   ArrowLeftRight,
   FileBarChart,
+  Database,
   LogOut,
   ChevronLeft,
   Scissors,
@@ -36,6 +37,7 @@ const navGroups = [
     title: 'ANALITIK',
     items: [
       { path: '/laporan', name: 'Analitik & Laba Rugi', icon: FileBarChart, roles: ['OWNER'] },
+      { path: '/data-management', name: 'Manajemen Data', icon: Database, roles: ['OWNER'] },
     ],
   },
 ]

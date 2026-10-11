@@ -9,6 +9,7 @@ import POS from '../pages/POS'
 import Inventory from '../pages/Inventory'
 import StockMutation from '../pages/StockMutation'
 import Reports from '../pages/Reports'
+import DataManagement from '../pages/owner/DataManagement'
 
 export default function AppRoutes() {
   const { loading } = useAuth()
@@ -82,6 +83,16 @@ export default function AppRoutes() {
           <ProtectedRoute roles={['OWNER']}>
             <DashboardLayout>
               <Reports />
+            </DashboardLayout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/data-management"
+        element={
+          <ProtectedRoute roles={['OWNER']}>
+            <DashboardLayout>
+              <DataManagement />
             </DashboardLayout>
           </ProtectedRoute>
         }
