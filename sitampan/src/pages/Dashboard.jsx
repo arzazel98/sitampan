@@ -241,10 +241,17 @@ export default function Dashboard() {
     const txSource = activeTransactions.length > 0 ? activeTransactions : (useSimulationData ? sampleTransactions : [])
 
     txSource.forEach(t => {
-      const m = t.metode || 'Cash'
-      if (m.toLowerCase().includes('qris')) map.QRIS += Number(t.total || 0)
-      else if (m.toLowerCase().includes('cash') || m.toLowerCase().includes('tunai')) map.Cash += Number(t.total || 0)
-      else map.Transfer += Number(t.total || 0)
+      const m = (t.metode || 'Cash').toLowerCase()
+      if (m.includes('split') || (Number(t.split_cash) > 0 && Number(t.split_qris) > 0)) {
+        map.Cash += Number(t.split_cash || 0)
+        map.QRIS += Number(t.split_qris || 0)
+      } else if (m.includes('qris')) {
+        map.QRIS += Number(t.total || 0)
+      } else if (m.includes('cash') || m.includes('tunai')) {
+        map.Cash += Number(t.total || 0)
+      } else {
+        map.Transfer += Number(t.total || 0)
+      }
     })
 
     const totalVal = (map.QRIS + map.Cash + map.Transfer) || 1
@@ -951,6 +958,8 @@ export default function Dashboard() {
                             className={`inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
                               t.metode === 'QRIS'
                                 ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                                : String(t.metode || '').includes('Split')
+                                ? 'bg-amber-50 text-amber-800 border border-amber-200'
                                 : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                             }`}
                           >

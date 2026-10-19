@@ -64,13 +64,13 @@ export default function Sidebar({
       {mobileOpen && (
         <div
           onClick={() => setMobileOpen(false)}
-          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-40 lg:hidden transition-opacity"
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-[55] lg:hidden transition-opacity"
         />
       )}
 
       {/* Sidebar Container */}
       <aside
-        className={`fixed top-0 bottom-0 left-0 z-50 flex flex-col bg-slate-950 text-white border-r border-slate-800/80 transition-all duration-300 ${
+        className={`fixed top-0 bottom-0 left-0 z-[60] flex flex-col bg-slate-950 text-white border-r border-slate-800/80 transition-all duration-300 ${
           collapsed ? 'lg:w-20' : 'lg:w-64'
         } ${
           mobileOpen ? 'w-64 translate-x-0' : '-translate-x-full lg:translate-x-0'
@@ -83,23 +83,10 @@ export default function Sidebar({
             onClick={() => setMobileOpen(false)}
             className="flex items-center gap-3 overflow-hidden"
           >
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 text-white flex items-center justify-center shadow-lg shadow-indigo-600/30 shrink-0">
-              <Scissors size={18} />
-            </div>
-            {(!collapsed || mobileOpen) && (
-              <div className="leading-tight">
-                <div className="flex items-center gap-1.5">
-                  <span className="font-extrabold text-sm tracking-tight text-white">
-                    SITAMPAN
-                  </span>
-                  <span className="text-[10px] bg-indigo-500/20 text-indigo-400 font-bold px-1.5 py-0.2 rounded border border-indigo-500/30">
-                    YK
-                  </span>
-                </div>
-                <p className="text-[10px] text-slate-400 font-medium tracking-wider uppercase">
-                  Barbershop & POS
-                </p>
-              </div>
+            {(!collapsed || mobileOpen) ? (
+              <img src="/logo.svg" alt="TAMPAN.YK Barbershop" className="h-10 w-auto rounded-lg bg-white px-2 py-1 shrink-0" />
+            ) : (
+              <img src="/logo.svg" alt="TAMPAN.YK" className="w-9 h-9 rounded-xl bg-white object-contain p-1 shrink-0" />
             )}
           </Link>
 

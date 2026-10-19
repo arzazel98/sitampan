@@ -32,12 +32,8 @@ export default function Login() {
       <div className="hidden lg:flex flex-col justify-between bg-slate-900 text-white p-12 relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-br from-indigo-600/30 via-transparent to-emerald-500/20" />
         <div className="relative">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-indigo-500 rounded-xl flex items-center justify-center"><Scissors size={20} /></div>
-            <div>
-              <h1 className="text-xl font-bold tracking-tight">SITAMPAN YK</h1>
-              <p className="text-xs text-slate-400 tracking-[0.2em]">BARBERSHOP PAKEM</p>
-            </div>
+          <div className="flex items-center gap-3 mb-4">
+            <img src="/logo.svg" alt="TAMPAN.YK Logo" className="h-16 w-auto rounded-2xl bg-white px-3 py-2 shadow-sm border border-slate-100" />
           </div>
         </div>
         <div className="relative">

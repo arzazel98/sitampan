@@ -20,14 +20,14 @@ import {
   AlertTriangle,
 } from 'lucide-react'
 import Modal from '../components/common/Modal'
-import { getBarbers } from '../utils/barberManager'
+import { getBarbers, fetchBarbers } from '../utils/barberManager'
 import {
   getExpenses,
   addExpense,
   deleteExpense,
   EXPENSE_CATEGORIES,
 } from '../utils/expenseManager'
-import { getShiftHistory } from '../utils/shiftManager'
+import { getShiftHistory, fetchShiftHistoryCloud } from '../utils/shiftManager'
 import { printZReport } from '../utils/printReceipt'
 import { useAuth } from '../hooks/useAuth'
 
@@ -61,12 +61,12 @@ export default function Reports() {
   const [expenseNote, setExpenseNote] = useState('')
 
   // Barbers
-  const barbers = useMemo(() => getBarbers(), [])
+  const [barbers, setBarbers] = useState(() => getBarbers())
 
   useEffect(() => {
     async function loadReports() {
       setLoading(true)
-      const [tRes, pRes, mRes, iRes] = await Promise.all([
+      const [tRes, pRes, mRes, iRes, cloudShifts, cloudBarbers] = await Promise.all([
         supabase
           .from('transactions')
           .select('*, transaction_items(*)')
@@ -77,11 +77,15 @@ export default function Reports() {
           .select('*')
           .order('tanggal', { ascending: false }),
         supabase.from('transaction_items').select('*'),
+        fetchShiftHistoryCloud(),
+        fetchBarbers(),
       ])
 
       if (tRes.data) setTransactions(tRes.data)
       if (pRes.data) setProducts(pRes.data)
       if (mRes.data) setMutations(mRes.data)
+      if (cloudShifts && cloudShifts.length > 0) setShiftHistory(cloudShifts)
+      if (cloudBarbers && cloudBarbers.length > 0) setBarbers(cloudBarbers)
       if (iRes.data) {
         setTransactionItems(iRes.data)
         const map = {}
@@ -104,9 +108,11 @@ export default function Reports() {
     loadReports()
   }, [])
 
-  function refreshLocalData() {
+  async function refreshLocalData() {
     setExpenses(getExpenses())
-    setShiftHistory(getShiftHistory())
+    const [s, b] = await Promise.all([fetchShiftHistoryCloud(), fetchBarbers()])
+    if (s) setShiftHistory(s)
+    if (b) setBarbers(b)
   }
 
   // 1. Kapster Commission Aggregation
@@ -683,9 +689,20 @@ export default function Reports() {
                       {formatRp(t.total)}
                     </td>
                     <td className="px-6 py-3.5 text-center">
-                      <span className="px-2 py-0.5 bg-slate-100 rounded-lg text-xs font-bold text-slate-700">
-                        {t.metode}
-                      </span>
+                      {String(t.metode || '').toLowerCase().includes('split') || (Number(t.split_cash) > 0 && Number(t.split_qris) > 0) ? (
+                        <div className="inline-flex flex-col items-center">
+                          <span className="px-2 py-0.5 bg-amber-50 border border-amber-200 rounded-lg text-[10px] font-bold text-amber-800">
+                            SPLIT
+                          </span>
+                          <span className="text-[10px] text-slate-500 font-mono mt-0.5 whitespace-nowrap">
+                            T: {formatRp(t.split_cash || 0)} | Q: {formatRp(t.split_qris || 0)}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="px-2 py-0.5 bg-slate-100 rounded-lg text-xs font-bold text-slate-700">
+                          {t.metode || 'Cash'}
+                        </span>
+                      )}
                     </td>
                     <td className="px-6 py-3.5 text-xs text-slate-600">{t.kasir}</td>
                   </tr>

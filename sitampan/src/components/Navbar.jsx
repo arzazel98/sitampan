@@ -33,7 +33,7 @@ export default function Navbar({
   }, [])
 
   return (
-    <header className="h-16 bg-white/90 backdrop-blur-md border-b border-slate-200/80 sticky top-0 z-20 px-4 sm:px-6 flex items-center justify-between transition-all">
+    <header className="h-16 bg-white/90 backdrop-blur-md border-b border-slate-200/80 sticky top-0 z-[55] px-4 sm:px-6 flex items-center justify-between transition-all">
       {/* Left: Mobile hamburger + title & breadcrumb */}
       <div className="flex items-center gap-3">
         <button

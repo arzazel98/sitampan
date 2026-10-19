@@ -31,18 +31,21 @@ import {
 } from 'lucide-react'
 import Modal from '../components/common/Modal'
 import { printReceipt, printZReport } from '../utils/printReceipt'
-import { getBarbers } from '../utils/barberManager'
+import { getBarbers, fetchBarbers } from '../utils/barberManager'
 import { PRESET_DISCOUNTS, calculateDiscount } from '../utils/discounts'
 import {
   getActiveShift,
+  fetchActiveShiftCloud,
   openShift,
   closeShift,
   recordSaleInShift,
 } from '../utils/shiftManager'
 import { addExpense, EXPENSE_CATEGORIES } from '../utils/expenseManager'
 
+import { services as localServices } from '../data/inventoryData'
+
 export default function POS() {
-  const { profile } = useAuth()
+  const { profile, isOwner } = useAuth()
   const [products, setProducts] = useState([])
   const [services, setServices] = useState([])
   const [cart, setCart] = useState([])
@@ -52,9 +55,9 @@ export default function POS() {
   const [q, setQ] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('Semua')
 
-  // Barbers list & selection
-  const barbers = useMemo(() => getBarbers(), [])
-  const [selectedBarber, setSelectedBarber] = useState(barbers[0]?.nama || 'Doni')
+  // Barbers list & selection (Sync dari Supabase Cloud + Local Cache)
+  const [barbers, setBarbers] = useState(() => getBarbers())
+  const [selectedBarber, setSelectedBarber] = useState(() => getBarbers()[0]?.nama || 'Doni')
 
   // Customer identity
   const [customerName, setCustomerName] = useState('')
@@ -64,8 +67,9 @@ export default function POS() {
   const [selectedDiscountId, setSelectedDiscountId] = useState('none')
   const [customDiscountNominal, setCustomDiscountNominal] = useState(0)
 
-  // Cash calculation
+  // Payment & Cash calculation
   const [cashTendered, setCashTendered] = useState('')
+  const [splitCash, setSplitCash] = useState('')
 
   // Shift Management State
   const [activeShift, setActiveShift] = useState(() => getActiveShift())
@@ -89,17 +93,43 @@ export default function POS() {
         supabase.from('services').select('*').order('nama'),
       ])
       setProducts(p.data || [])
-      setServices(s.data || [])
+      if (s.data && s.data.length >= localServices.length) {
+        setServices(s.data)
+      } else if (s.data && s.data.length > 0) {
+        setServices(localServices.map((ls, i) => s.data.find(d => d.nama?.toLowerCase() === ls.nama.toLowerCase()) || { ...ls, id: `local-${i}` }))
+      } else {
+        setServices(localServices.map((ls, i) => ({ ...ls, id: `local-${i}` })))
+        supabase.from('services').insert(localServices.map(x => ({ nama: x.nama, harga: x.harga, deskripsi: x.deskripsi }))).then(()=>{})
+      }
     } catch (err) {
       console.error('POS load error:', err)
+      setServices(localServices.map((ls, i) => ({ ...ls, id: `local-${i}` })))
     }
   }
 
   useEffect(() => {
     load()
-    // Refresh active shift
-    setActiveShift(getActiveShift())
-  }, [])
+
+    // 1. Fetch update kapster dari Cloud Supabase
+    fetchBarbers().then(res => {
+      if (res && res.length) {
+        setBarbers(res)
+        setSelectedBarber(prev => prev || res[0]?.nama || 'Doni')
+      }
+    })
+
+    // 2. Cek Active Shift (Local cache first, lalu sync dari Cloud Supabase)
+    const localShift = getActiveShift()
+    setActiveShift(localShift)
+    if (!localShift && !isOwner) setOpenShiftModal(true)
+
+    fetchActiveShiftCloud().then(cloudShift => {
+      if (cloudShift) {
+        setActiveShift(cloudShift)
+        setOpenShiftModal(false)
+      }
+    })
+  }, [isOwner])
 
   // Add Item to Cart
   function add(item, type) {
@@ -176,9 +206,31 @@ export default function POS() {
     return calculateDiscount(subtotal, activeDiscountObj)
   }, [subtotal, activeDiscountObj])
 
+  // Split payment amounts
+  const parsedSplitCash = Number(splitCash) || 0
+  const splitQris = Math.max(0, finalTotal - parsedSplitCash)
+
   const parsedCashTendered = Number(cashTendered) || 0
-  const change = Math.max(0, parsedCashTendered - finalTotal)
-  const isCashInsufficient = payment === 'Cash' && parsedCashTendered > 0 && parsedCashTendered < finalTotal
+  const change = useMemo(() => {
+    if (payment === 'Split') {
+      return Math.max(0, parsedCashTendered - parsedSplitCash)
+    }
+    return Math.max(0, parsedCashTendered - finalTotal)
+  }, [payment, parsedCashTendered, parsedSplitCash, finalTotal])
+
+  const isCashInsufficient = useMemo(() => {
+    if (payment === 'Cash') {
+      return parsedCashTendered > 0 && parsedCashTendered < finalTotal
+    }
+    if (payment === 'Split') {
+      return (
+        parsedSplitCash <= 0 ||
+        parsedSplitCash > finalTotal ||
+        (parsedCashTendered > 0 && parsedCashTendered < parsedSplitCash)
+      )
+    }
+    return false
+  }, [payment, parsedCashTendered, finalTotal, parsedSplitCash])
 
   // Shift Actions
   function handleOpenShift() {
@@ -233,8 +285,8 @@ export default function POS() {
   async function checkout() {
     if (!cart.length || loading) return
 
-    // Require active shift before checkout
-    if (!activeShift) {
+    // Require active shift before checkout (owner bypass)
+    if (!activeShift && !isOwner) {
       setOpenShiftModal(true)
       return
     }
@@ -242,6 +294,17 @@ export default function POS() {
     if (payment === 'Cash' && parsedCashTendered < finalTotal) {
       alert(`Uang tunai yang diterima kurang! Total tagihan adalah ${formatRp(finalTotal)}`)
       return
+    }
+
+    if (payment === 'Split') {
+      if (parsedSplitCash <= 0 || parsedSplitCash >= finalTotal) {
+        alert('Harap isi porsi tunai dengan benar (harus lebih dari Rp 0 dan kurang dari total tagihan)!')
+        return
+      }
+      if (parsedCashTendered < parsedSplitCash) {
+        alert(`Uang fisik tunai yang diserahkan kurang! Porsi tunai adalah ${formatRp(parsedSplitCash)}`)
+        return
+      }
     }
 
     setLoading(true)
@@ -258,16 +321,20 @@ export default function POS() {
         ? `${customerName.trim()}${customerPhone.trim() ? ` (${customerPhone.trim()})` : ''}`
         : 'Pelanggan Walk-in'
 
+      const trxMetode = payment === 'Split' ? 'Split (Tunai + QRIS)' : payment
+
       // 1. Insert transaction into Supabase
       const { error: tErr } = await supabase.from('transactions').insert({
         id: trxId,
         tanggal,
         jam,
         total: finalTotal,
-        metode: payment,
+        metode: trxMetode,
         kasir: profile?.full_name || 'Kasir',
         pelanggan: pelangganLabel,
         status: 'Berhasil',
+        split_cash: payment === 'Split' ? parsedSplitCash : 0,
+        split_qris: payment === 'Split' ? splitQris : 0,
       })
       if (tErr) throw tErr
 
@@ -317,6 +384,8 @@ export default function POS() {
         paymentMethod: payment,
         amount: finalTotal,
         trxId,
+        splitCash: payment === 'Split' ? parsedSplitCash : 0,
+        splitQris: payment === 'Split' ? splitQris : 0,
       })
       if (updatedShift) setActiveShift(updatedShift)
 
@@ -328,13 +397,15 @@ export default function POS() {
         diskon: discountAmount,
         diskonLabel: activeDiscountObj.label || '',
         total: finalTotal,
-        payment,
-        cashTendered: payment === 'Cash' ? parsedCashTendered : finalTotal,
-        change: payment === 'Cash' ? change : 0,
+        payment: trxMetode,
+        cashTendered: payment === 'Cash' || payment === 'Split' ? parsedCashTendered : finalTotal,
+        change: payment === 'Cash' || payment === 'Split' ? change : 0,
         date: `${tanggal} ${jam.slice(0, 5)}`,
         pelanggan: pelangganLabel,
         phone: customerPhone.trim(),
         customerName: customerName.trim() || 'Pelanggan',
+        splitCash: payment === 'Split' ? parsedSplitCash : 0,
+        splitQris: payment === 'Split' ? splitQris : 0,
       })
 
       // Reset cart and customer details
@@ -342,6 +413,7 @@ export default function POS() {
       setCustomerName('')
       setCustomerPhone('')
       setCashTendered('')
+      setSplitCash('')
       setSelectedDiscountId('none')
       load()
     } catch (e) {
@@ -408,8 +480,11 @@ ${itemsText}
 -----------------------------------
 Subtotal : ${formatRp(r.subtotal)}
 ${r.diskon > 0 ? `Diskon   : -${formatRp(r.diskon)}\n` : ''}*TOTAL*    : *${formatRp(r.total)}*
-Metode   : ${r.payment.toUpperCase()}
-${r.payment === 'Cash' ? `Diterima : ${formatRp(r.cashTendered)}\nKembali  : ${formatRp(r.change)}\n` : ''}Status   : *LUNAS ✅*
+${
+  r.splitCash > 0
+    ? `Metode   : SPLIT (TUNAI + QRIS)\n• Tunai  : ${formatRp(r.splitCash)}${r.cashTendered > 0 ? ` (Diterima ${formatRp(r.cashTendered)}, Kembali ${formatRp(r.change)})` : ''}\n• QRIS   : ${formatRp(r.splitQris)}\n`
+    : `Metode   : ${r.payment.toUpperCase()}\n${r.payment === 'Cash' ? `Diterima : ${formatRp(r.cashTendered)}\nKembali  : ${formatRp(r.change)}\n` : ''}`
+}Status   : *LUNAS ✅*
 -----------------------------------
 Terima kasih telah berkunjung ke SITAMPAN YK! 
 _Ganteng Maksimal, Percaya Diri Setiap Hari!_ ✨`
@@ -539,6 +614,16 @@ _Ganteng Maksimal, Percaya Diri Setiap Hari!_ ✨`
           </div>
 
           {/* Scrollable Items Container */}
+          {!activeShift && !isOwner ? (
+            <div className="flex-1 bg-amber-50/70 border-2 border-dashed border-amber-200 rounded-2xl grid place-items-center p-8 text-center">
+              <div className="space-y-3">
+                <div className="w-14 h-14 rounded-2xl bg-amber-100 text-amber-600 grid place-items-center mx-auto"><Lock size={24} /></div>
+                <p className="font-extrabold text-amber-900">Kasir Belum Dibuka</p>
+                <p className="text-xs text-amber-700 max-w-[280px] mx-auto">Buka laci kasir dengan kas awal untuk melihat layanan & produk. Menu lain & logout tetap bisa diakses lewat sidebar/navbar.</p>
+                <button type="button" onClick={() => setOpenShiftModal(true)} className="mt-1 inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold"><Unlock size={14} /> Buka Laci Kasir</button>
+              </div>
+            </div>
+          ) : (
           <div className="flex-1 overflow-y-auto space-y-6 pr-1 custom-scrollbar">
             {/* SECTION 1: SERVICES */}
             {filteredServices.length > 0 && (
@@ -555,32 +640,21 @@ _Ganteng Maksimal, Percaya Diri Setiap Hari!_ ✨`
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                   {filteredServices.map(s => (
                     <button
                       key={s.id}
                       onClick={() => add(s, 'service')}
-                      className="group bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200/90 hover:border-indigo-500 hover:shadow-md hover:shadow-indigo-500/5 text-left transition-all duration-200 flex flex-col justify-between"
+                      className="group bg-white p-2.5 rounded-xl border border-slate-200 hover:border-indigo-500 hover:shadow-md text-left transition-all flex flex-col justify-between"
                     >
                       <div>
-                        <div className="flex justify-between items-start">
-                          <p className="font-bold text-slate-900 group-hover:text-indigo-600 transition text-sm">
-                            {s.nama}
-                          </p>
-                          <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100 shrink-0 ml-1">
-                            Layanan
-                          </span>
-                        </div>
-                        <p className="text-xs text-slate-500 line-clamp-1 mt-1">
-                          {s.deskripsi || 'Layanan potong rambut & styling'}
+                        <p className="font-bold text-slate-900 group-hover:text-indigo-600 transition text-xs leading-tight">
+                          {s.nama}
                         </p>
                       </div>
-                      <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between">
-                        <span className="font-black text-slate-900 text-base">
+                      <div className="mt-2 flex items-center justify-between">
+                        <span className="font-black text-slate-900 text-sm">
                           {formatRp(s.harga)}
-                        </span>
-                        <span className="text-xs font-bold text-indigo-600 group-hover:translate-x-0.5 transition-transform">
-                          + Pilih ({selectedBarber})
                         </span>
                       </div>
                     </button>
@@ -699,6 +773,7 @@ _Ganteng Maksimal, Percaya Diri Setiap Hari!_ ✨`
               )}
             </section>
           </div>
+          )}
         </div>
 
         {/* RIGHT: Cart & Checkout Section */}
@@ -885,30 +960,47 @@ _Ganteng Maksimal, Percaya Diri Setiap Hari!_ ✨`
 
             {/* Payment Method Selector */}
             <div>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-3 gap-1.5">
                 <button
                   type="button"
                   onClick={() => setPayment('Cash')}
-                  className={`py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition ${
+                  className={`py-2 px-1.5 rounded-xl border text-[11px] font-bold flex items-center justify-center gap-1.5 transition ${
                     payment === 'Cash'
                       ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
                       : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
                   }`}
                 >
-                  <CreditCard size={14} />
-                  <span>TUNAI (CASH)</span>
+                  <CreditCard size={13} />
+                  <span>TUNAI</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setPayment('QRIS')}
-                  className={`py-2 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition ${
+                  className={`py-2 px-1.5 rounded-xl border text-[11px] font-bold flex items-center justify-center gap-1.5 transition ${
                     payment === 'QRIS'
                       ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
                       : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
                   }`}
                 >
-                  <QrCode size={14} />
+                  <QrCode size={13} />
                   <span>QRIS</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPayment('Split')
+                    if (!splitCash && finalTotal > 0) {
+                      setSplitCash(String(Math.round(finalTotal / 2)))
+                    }
+                  }}
+                  className={`py-2 px-1.5 rounded-xl border text-[11px] font-bold flex items-center justify-center gap-1.5 transition ${
+                    payment === 'Split'
+                      ? 'bg-amber-600 text-white border-amber-600 shadow-sm'
+                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  <Coins size={13} />
+                  <span>SPLIT</span>
                 </button>
               </div>
             </div>
@@ -968,6 +1060,113 @@ _Ganteng Maksimal, Percaya Diri Setiap Hari!_ ✨`
               </div>
             )}
 
+            {/* Split Payment Calculator (Pecah Tunai + QRIS) */}
+            {payment === 'Split' && (
+              <div className="p-2.5 bg-amber-50/70 rounded-2xl border border-amber-200 space-y-2">
+                <div className="flex items-center justify-between text-xs font-bold text-amber-900">
+                  <span className="flex items-center gap-1">
+                    <Coins size={13} className="text-amber-600" /> Pecah Bayar (Split)
+                  </span>
+                  <span className="text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-mono">
+                    Total: {formatRp(finalTotal)}
+                  </span>
+                </div>
+
+                {/* 1. Porsi Tunai */}
+                <div className="bg-white p-2 rounded-xl border border-amber-100 space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-bold text-slate-700">1. Porsi Tunai:</span>
+                    <input
+                      type="number"
+                      value={splitCash}
+                      onChange={e => setSplitCash(e.target.value)}
+                      placeholder="Nominal tunai"
+                      className="w-32 text-right font-mono font-bold text-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-1 overflow-x-auto pb-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setSplitCash(String(Math.round(finalTotal / 2)))}
+                      className="px-2 py-0.5 text-[10px] font-bold rounded bg-amber-100 text-amber-900 hover:bg-amber-200"
+                    >
+                      50:50
+                    </button>
+                    {[20000, 50000, 100000].filter(v => v < finalTotal).map(val => (
+                      <button
+                        key={val}
+                        type="button"
+                        onClick={() => setSplitCash(String(val))}
+                        className="px-2 py-0.5 text-[10px] font-bold rounded bg-slate-100 text-slate-700 hover:bg-slate-200"
+                      >
+                        {val / 1000}k
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 2. Porsi QRIS */}
+                <div className="flex items-center justify-between text-xs px-2.5 py-1.5 bg-indigo-50/80 rounded-xl border border-indigo-100 text-indigo-950 font-medium">
+                  <span className="flex items-center gap-1 font-bold">
+                    <QrCode size={13} className="text-indigo-600" /> 2. Sisa via QRIS:
+                  </span>
+                  <span className="font-black font-mono text-indigo-700 text-sm">
+                    {formatRp(splitQris)}
+                  </span>
+                </div>
+
+                {/* 3. Uang Tunai Diterima */}
+                <div className="bg-white p-2 rounded-xl border border-amber-100 space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-bold text-slate-700">Tunai Diterima:</span>
+                    <input
+                      type="number"
+                      value={cashTendered}
+                      onChange={e => setCashTendered(e.target.value)}
+                      placeholder={String(parsedSplitCash || '')}
+                      className="w-32 text-right font-mono font-bold text-slate-900 text-xs px-2 py-1 rounded-lg border border-slate-200 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-1 overflow-x-auto pb-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setCashTendered(String(parsedSplitCash))}
+                      className="px-2 py-0.5 text-[10px] font-bold rounded bg-slate-100 text-slate-700 hover:bg-slate-200"
+                    >
+                      Uang Pas
+                    </button>
+                    {[50000, 100000, 150000, 200000].filter(v => v >= parsedSplitCash).map(val => (
+                      <button
+                        key={val}
+                        type="button"
+                        onClick={() => setCashTendered(String(val))}
+                        className="px-2 py-0.5 text-[10px] font-bold rounded bg-slate-100 text-slate-700 hover:bg-slate-200"
+                      >
+                        {val / 1000}k
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1 border-t border-slate-100 text-xs">
+                    <span className="font-bold text-slate-500">Kembalian Tunai:</span>
+                    <span
+                      className={`font-black ${
+                        parsedCashTendered > 0 && parsedCashTendered < parsedSplitCash
+                          ? 'text-rose-600'
+                          : 'text-emerald-600 text-sm'
+                      }`}
+                    >
+                      {parsedCashTendered > 0 && parsedCashTendered < parsedSplitCash
+                        ? `Kurang ${formatRp(parsedSplitCash - parsedCashTendered)}`
+                        : formatRp(change)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Process Payment Button */}
             <button
               onClick={checkout}
@@ -997,7 +1196,7 @@ _Ganteng Maksimal, Percaya Diri Setiap Hari!_ ✨`
       {openShiftModal && (
         <Modal
           open={openShiftModal}
-          onClose={() => setOpenShiftModal(false)}
+          onClose={() => { if (activeShift) setOpenShiftModal(false) }}
           title="Buka Shift Kasir Baru"
         >
           <div className="space-y-4">
@@ -1041,10 +1240,13 @@ _Ganteng Maksimal, Percaya Diri Setiap Hari!_ ✨`
             <div className="flex gap-2 justify-end pt-2">
               <button
                 type="button"
-                onClick={() => setOpenShiftModal(false)}
+                onClick={() => {
+                  setOpenShiftModal(false)
+                  window.location.href = '/'
+                }}
                 className="px-4 py-2 text-xs font-semibold bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-700"
               >
-                Batal
+                Kembali ke Beranda
               </button>
               <button
                 type="button"
@@ -1384,17 +1586,42 @@ _Ganteng Maksimal, Percaya Diri Setiap Hari!_ ✨`
                   <span>Metode:</span>
                   <span className="font-bold">{receipt.payment}</span>
                 </div>
-                {receipt.payment === 'Cash' && (
+                {receipt.splitCash > 0 ? (
                   <>
-                    <div className="flex justify-between text-slate-600">
-                      <span>Tunai Diterima:</span>
-                      <span>{formatRp(receipt.cashTendered)}</span>
+                    <div className="flex justify-between text-slate-600 text-[11px] pl-2">
+                      <span>• Porsi Tunai:</span>
+                      <span className="font-bold">{formatRp(receipt.splitCash)}</span>
                     </div>
-                    <div className="flex justify-between text-emerald-600 font-bold">
-                      <span>Kembalian:</span>
-                      <span>{formatRp(receipt.change)}</span>
+                    <div className="flex justify-between text-slate-600 text-[11px] pl-2">
+                      <span>• Porsi QRIS:</span>
+                      <span className="font-bold">{formatRp(receipt.splitQris)}</span>
                     </div>
+                    {receipt.cashTendered > 0 && (
+                      <>
+                        <div className="flex justify-between text-slate-600 text-[11px] pl-2">
+                          <span>Tunai Diterima:</span>
+                          <span>{formatRp(receipt.cashTendered)}</span>
+                        </div>
+                        <div className="flex justify-between text-emerald-600 font-bold text-[11px] pl-2">
+                          <span>Kembalian Tunai:</span>
+                          <span>{formatRp(receipt.change)}</span>
+                        </div>
+                      </>
+                    )}
                   </>
+                ) : (
+                  receipt.payment === 'Cash' && (
+                    <>
+                      <div className="flex justify-between text-slate-600">
+                        <span>Tunai Diterima:</span>
+                        <span>{formatRp(receipt.cashTendered)}</span>
+                      </div>
+                      <div className="flex justify-between text-emerald-600 font-bold">
+                        <span>Kembalian:</span>
+                        <span>{formatRp(receipt.change)}</span>
+                      </div>
+                    </>
+                  )
                 )}
                 <div className="flex justify-between text-emerald-600 font-bold">
                   <span>Status:</span>
@@ -1436,6 +1663,8 @@ _Ganteng Maksimal, Percaya Diri Setiap Hari!_ ✨`
                     payment: receipt.payment,
                     cashTendered: receipt.cashTendered,
                     change: receipt.change,
+                    splitCash: receipt.splitCash || 0,
+                    splitQris: receipt.splitQris || 0,
                   })
                 }
                 className="inline-flex items-center gap-1.5 px-4 py-2.5 bg-slate-900 hover:bg-black text-white text-xs font-bold rounded-xl shadow-sm transition"

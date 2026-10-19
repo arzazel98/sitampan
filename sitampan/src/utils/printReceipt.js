@@ -16,6 +16,8 @@ export function printReceipt({
   storeName = 'SITAMPAN YK BARBERSHOP',
   storeAddress = 'Pakem, Sleman, D.I. Yogyakarta',
   storePhone = '0812-3456-7890',
+  splitCash = 0,
+  splitQris = 0,
 }) {
   const iframe = document.createElement('iframe')
   iframe.style.position = 'fixed'
@@ -48,7 +50,8 @@ export function printReceipt({
     })
     .join('')
 
-  const isCash = payment.toLowerCase() === 'cash' || payment.toLowerCase() === 'tunai'
+  const isSplit = payment.toLowerCase().includes('split') || (Number(splitCash) > 0 && Number(splitQris) > 0)
+  const isCash = !isSplit && (payment.toLowerCase() === 'cash' || payment.toLowerCase() === 'tunai')
 
   const receiptContent = `
     <!DOCTYPE html>
@@ -173,23 +176,56 @@ export function printReceipt({
             <span>TOTAL:</span>
             <span>${formatRp(total)}</span>
           </div>
-          <div class="flex" style="font-size: 11px;">
-            <span>Metode Bayar:</span>
-            <span class="bold">${payment.toUpperCase()}</span>
-          </div>
           ${
-            isCash && cashTendered > 0
+            isSplit
               ? `
               <div class="flex" style="font-size: 11px;">
-                <span>Tunai Diterima:</span>
-                <span>${formatRp(cashTendered)}</span>
+                <span>Metode Bayar:</span>
+                <span class="bold">SPLIT (TUNAI + QRIS)</span>
               </div>
-              <div class="flex" style="font-size: 11px; font-weight: bold;">
-                <span>Kembalian:</span>
-                <span>${formatRp(change)}</span>
+              <div class="flex" style="font-size: 10px; color: #333; padding-left: 6px;">
+                <span>• Porsi Tunai:</span>
+                <span>${formatRp(splitCash)}</span>
               </div>
+              <div class="flex" style="font-size: 10px; color: #333; padding-left: 6px;">
+                <span>• Porsi QRIS:</span>
+                <span>${formatRp(splitQris)}</span>
+              </div>
+              ${
+                cashTendered > 0
+                  ? `
+                <div class="flex" style="font-size: 10px; padding-left: 6px;">
+                  <span>Uang Tunai Diterima:</span>
+                  <span>${formatRp(cashTendered)}</span>
+                </div>
+                <div class="flex" style="font-size: 10px; font-weight: bold; padding-left: 6px;">
+                  <span>Kembalian Tunai:</span>
+                  <span>${formatRp(change)}</span>
+                </div>
+              `
+                  : ''
+              }
             `
-              : ''
+              : `
+              <div class="flex" style="font-size: 11px;">
+                <span>Metode Bayar:</span>
+                <span class="bold">${payment.toUpperCase()}</span>
+              </div>
+              ${
+                isCash && cashTendered > 0
+                  ? `
+                <div class="flex" style="font-size: 11px;">
+                  <span>Tunai Diterima:</span>
+                  <span>${formatRp(cashTendered)}</span>
+                </div>
+                <div class="flex" style="font-size: 11px; font-weight: bold;">
+                  <span>Kembalian:</span>
+                  <span>${formatRp(change)}</span>
+                </div>
+              `
+                  : ''
+              }
+            `
           }
           <div class="flex" style="font-size: 11px; margin-top: 4px;">
             <span>Status:</span>

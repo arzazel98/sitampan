@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
-import { Trash2, ShieldAlert, Database, RotateCcw, Clock, User } from 'lucide-react'
+import { Trash2, ShieldAlert, Database, RotateCcw, Clock, User, RefreshCw } from 'lucide-react'
 import { useAuth } from '../../hooks/useAuth'
 import Modal from '../../components/common/Modal'
-import { fetchTransactionCounts, resetAllTransactions, getResetAuditLog } from '../../services/transactionService'
+import { fetchTransactionCounts, resetAllTransactions, getResetAuditLog, syncServicesFromLocal } from '../../services/transactionService'
+import { services as localServices } from '../../data/inventoryData'
 
 export default function DataManagement() {
   const { profile } = useAuth()
@@ -12,6 +13,7 @@ export default function DataManagement() {
   const [agree, setAgree] = useState(false)
   const [showModal, setShowModal] = useState(false)
   const [processing, setProcessing] = useState(false)
+  const [syncing, setSyncing] = useState(false)
   const [audit, setAudit] = useState(() => getResetAuditLog())
   const [done, setDone] = useState(false)
 
@@ -20,7 +22,7 @@ export default function DataManagement() {
     try {
       const c = await fetchTransactionCounts()
       setCounts(c)
-    } catch { }
+    } catch (e) { console.error(e) }
     setLoading(false)
   }
 
@@ -28,6 +30,19 @@ export default function DataManagement() {
 
   const canReset = agree && confirmText.trim() === 'RESET' && !processing
   const totalRecords = counts.transactions + counts.items + counts.mutations
+
+  async function handleSyncPricelist() {
+    if (!confirm('Sinkronkan pricelist dari kode ke Database? Harga layanan di kasir akan terupdate.')) return
+    setSyncing(true)
+    try {
+      await syncServicesFromLocal(localServices)
+      alert('Pricelist berhasil disinkronkan ke Database!')
+    } catch (e) {
+      alert('Gagal sync: ' + e.message)
+    } finally {
+      setSyncing(false)
+    }
+  }
 
   async function handleConfirmReset() {
     if (!canReset) return
@@ -52,9 +67,12 @@ export default function DataManagement() {
       <div className="bg-white rounded-2xl border border-slate-200 p-5 flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="font-extrabold text-slate-900 text-base flex items-center gap-2"><Database size={18} className="text-indigo-600" /> Manajemen Data (Owner Only)</h2>
-          <p className="text-xs text-slate-500 mt-1">Reset transaksi terpusat dengan audit & konfirmasi ganda. Akses eksklusif role OWNER.</p>
+          <p className="text-xs text-slate-500 mt-1">Kelola data pricelist dan reset transaksi. Akses eksklusif role OWNER.</p>
         </div>
-        <span className="px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-bold flex items-center gap-1.5"><ShieldAlert size={14} /> Hanya OWNER</span>
+        <div className="flex gap-2">
+            <button onClick={handleSyncPricelist} disabled={syncing} className="px-4 py-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-xl text-xs font-bold flex items-center gap-2"><RefreshCw size={14} /> {syncing ? 'Menyinkronkan...' : 'Sync Pricelist ke DB'}</button>
+            <span className="px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-bold flex items-center gap-1.5"><ShieldAlert size={14} /> Owner</span>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
